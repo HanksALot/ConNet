@@ -7,11 +7,8 @@ The code of "Iterative Joint Learning Integrating Temporal and Geometric Informa
 
 ## Quick Usage
 Using the train.py and test.py to train and test the model on the dataset, respectively.
-
+checkpoint link: https://pan.baidu.com/s/1XtcC0to6w0a2PKSdrOkfkg 提取码: f74c 
 
 ## Acknowledgements
 This project is a derivative work based on MMSegmentation, an open-source project released under the Apache 2.0 License. 
 We sincerely thank the OpenMMLab team and all MMSegmentation contributors for their outstanding open-source efforts.
-
-
-
