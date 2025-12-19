@@ -7,6 +7,7 @@ The code of "Iterative Joint Learning Integrating Temporal and Geometric Informa
 
 ## Quick Usage
 Using the train.py and test.py to train and test the model on the dataset, respectively.
+
 checkpoint link: https://pan.baidu.com/s/1XtcC0to6w0a2PKSdrOkfkg 提取码: f74c 
 
 ## Acknowledgements
