@@ -1,0 +1,179 @@
+import os.path as osp
+
+import mmcv
+import numpy as np
+
+from mmseg.datasets.builder import PIPELINES
+
+
+@PIPELINES.register_module()
+class LoadImageFromFileDCtl(object):
+    """Load an image from file.
+
+    Required keys are "img_prefix" and "img_info" (a dict that must contain the
+    key "filename"). Added or updated keys are "filename", "img", "img_shape",
+    "ori_shape" (same as `img_shape`), "pad_shape" (same as `img_shape`),
+    "scale_factor" (1.0) and "img_norm_cfg" (means=0 and stds=1).
+
+    Args:
+        to_float32 (bool): Whether to convert the loaded image to a float32
+            numpy array. If set to False, the loaded image is an uint8 array.
+            Defaults to False.
+        color_type (str): The flag argument for :func:`mmcv.imfrombytes`.
+            Defaults to 'color'.
+        file_client_args (dict): Arguments to instantiate a FileClient.
+            See :class:`mmcv.fileio.FileClient` for details.
+            Defaults to ``dict(backend='disk')``.
+        imdecode_backend (str): Backend for :func:`mmcv.imdecode`. Default:
+            'cv2'
+    """
+
+    def __init__(self,
+                 to_float32=False,
+                 color_type='unchanged',
+                 file_client_args=None,
+                 imdecode_backend='cv2'):
+        if file_client_args is None:
+            file_client_args = dict(backend='disk')
+
+        self.to_float32 = to_float32
+        self.color_type = color_type
+        self.file_client_args = file_client_args.copy()
+        self.file_client = None
+        self.imdecode_backend = imdecode_backend
+
+    def __call__(self, results):
+        """Call functions to load image and get image meta information.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains loaded image and meta information.
+        """
+
+        if self.file_client is None:
+            self.file_client = mmcv.FileClient(**self.file_client_args)
+
+        img_info_list = results['img_info']['filename']
+        filename = []
+        img = []
+        for file in img_info_list:
+            sub_filename = osp.join(results['img_prefix'], file)
+            img_bytes = self.file_client.get(sub_filename)
+            img_data = mmcv.imfrombytes(
+                img_bytes, flag=self.color_type, backend=self.imdecode_backend)
+            if self.to_float32:
+                img_data = img_data.astype(np.float32)
+            filename.append(sub_filename)
+            img.append(img_data)
+
+        if results['cdt_guidance'] is True:
+            cdt_gui_prefix = results['img_prefix'].replace('seq_dir', 'cdt_gui_dir')
+            cdt_file = img_info_list[len(img_info_list) // 2]
+            cdt_filename = osp.join(cdt_gui_prefix, cdt_file)
+            cdt_filename = cdt_filename.replace('.png', '.npy')
+
+            cdt_data = np.load(cdt_filename)
+            img.append(cdt_data)
+
+        results['filename'] = filename
+        results['ori_filename'] = results['img_info']['filename']
+        results['img'] = img
+        results['img_shape'] = img[-1].shape
+        results['ori_shape'] = img[-1].shape
+        # Set initial values for default meta_keys
+        results['pad_shape'] = img[-1].shape
+        results['scale_factor'] = 1.0
+        num_channels = 1 if len(img[-1].shape) < 3 else img[-1].shape[2]
+        results['img_norm_cfg'] = dict(
+            mean=np.zeros(num_channels, dtype=np.float32),
+            std=np.ones(num_channels, dtype=np.float32),
+            to_rgb=False)
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(to_float32={self.to_float32},'
+        repr_str += f"color_type='{self.color_type}',"
+        repr_str += f"imdecode_backend='{self.imdecode_backend}')"
+        return repr_str
+
+
+@PIPELINES.register_module()
+class LoadAnnotationsDCtl(object):
+    """Load annotations for semantic segmentation.
+
+    Args:
+        reduce_zero_label (bool): Whether reduce all label value by 1.
+            Usually used for datasets where 0 is background label.
+            Default: False.
+        file_client_args (dict): Arguments to instantiate a FileClient.
+            See :class:`mmcv.fileio.FileClient` for details.
+            Defaults to ``dict(backend='disk')``.
+        imdecode_backend (str): Backend for :func:`mmcv.imdecode`. Default:
+            'pillow'
+    """
+
+    def __init__(self,
+                 reduce_zero_label=False,
+                 file_client_args=None,
+                 imdecode_backend='pillow'):
+        if file_client_args is None:
+            file_client_args = dict(backend='disk')
+
+        self.reduce_zero_label = reduce_zero_label
+        self.file_client_args = file_client_args.copy()
+        self.file_client = None
+        self.imdecode_backend = imdecode_backend
+
+    def __call__(self, results):
+        """Call function to load multiple types annotations.
+
+        Args:
+            results (dict): Result dict from :obj:`mmseg.CustomDataset`.
+
+        Returns:
+            dict: The dict contains loaded semantic segmentation annotations.
+        """
+
+        if self.file_client is None:
+            self.file_client = mmcv.FileClient(**self.file_client_args)
+
+        ann_info_list = results['ann_info']['seg_map']
+        gt_semantic_seg = []
+        for i, file in enumerate(ann_info_list):
+            if 'gui_prefix' in results and results['generate_guidance'] \
+                    and i != len(ann_info_list) - 1:
+                sub_filename = osp.join(results['gui_prefix'], file)
+            else:
+                sub_filename = osp.join(results['seg_prefix'], file)
+            img_bytes = self.file_client.get(sub_filename)
+            sub_gt_semantic_seg = mmcv.imfrombytes(
+                img_bytes, flag='unchanged',
+                backend=self.imdecode_backend).squeeze().astype(np.uint8)
+            # modify if custom classes
+            if results.get('label_map', None) is not None:
+                # Add deep copy to solve bug of repeatedly
+                # replace `gt_semantic_seg`, which is reported in
+                # https://github.com/open-mmlab/mmsegmentation/pull/1445/
+                sub_gt_semantic_seg_copy = sub_gt_semantic_seg.copy()
+                for old_id, new_id in results['label_map'].items():
+                    sub_gt_semantic_seg[sub_gt_semantic_seg_copy == old_id] = new_id
+            # reduce zero_label
+            if self.reduce_zero_label:
+                # avoid using underflow conversion
+                sub_gt_semantic_seg[sub_gt_semantic_seg == 0] = 255
+                sub_gt_semantic_seg = sub_gt_semantic_seg - 1
+                sub_gt_semantic_seg[sub_gt_semantic_seg == 254] = 255
+            gt_semantic_seg.append(sub_gt_semantic_seg)
+
+        results['gt_semantic_seg'] = gt_semantic_seg
+        results['seg_fields'].append('gt_semantic_seg')
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(reduce_zero_label={self.reduce_zero_label},'
+        repr_str += f"imdecode_backend='{self.imdecode_backend}')"
+        return repr_str

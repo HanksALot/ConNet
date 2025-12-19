@@ -1,0 +1,2 @@
+from .test_dctlnet import single_gpu_test_dctlnet
+from .test_semi3dtenet import single_gpu_test_semi3dtenet
